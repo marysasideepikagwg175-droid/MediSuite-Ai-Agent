@@ -50,7 +50,7 @@ __________________________________________
 1. Clone the repository:
 ```bash
 git clone https://github.com/MahmoudRabea13/MediSuite-Ai-Agent.git
-cd MediSuite
+cd MediSuite-Ai-Agent
 ```
 
 2. Install required dependencies:
