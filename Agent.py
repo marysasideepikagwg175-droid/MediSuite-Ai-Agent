@@ -21,7 +21,7 @@ POPPLER_PATH = r'C:\Program Files\poppler-24.08.0\Library\bin'
 
 # Initialize OpenAI API
 # Replace with your actual API key
-openai.api_key = "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"
+openai.api_key = "I'm a key :) "
 
 class MedicalCodingAgent:
     def __init__(self, icd10_data_path="ICD10.json", cpt4_data_path="CPT4.json"):
