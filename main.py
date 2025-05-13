@@ -1,5 +1,6 @@
 import os
 from Agent import MedicalCodingAgent
+from openai_implementation import OpenAIImplementation
 
 def main():
     """Main entry point for the CLI."""
@@ -8,11 +9,14 @@ def main():
     poppler_path = os.getenv('POPPLER_PATH', '/usr/bin')  # Default for Linux
     openai_api_key = os.getenv('OPENAI_API_KEY', 'your-default-api-key')
 
+    # Initialize the LLM interface
+    llm = OpenAIImplementation(api_key=openai_api_key)
+    
     # Inject configurations into the MedicalCodingAgent
     agent = MedicalCodingAgent(
         tesseract_cmd=tesseract_cmd,
         poppler_path=poppler_path,
-        openai_api_key=openai_api_key
+        llm=llm,
     )
     agent.start_conversation()
 

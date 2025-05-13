@@ -1,7 +1,6 @@
 import os
 import json
 import re
-import openai
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 from fuzzywuzzy import fuzz, process
@@ -9,20 +8,19 @@ import pytesseract
 from pdf2image import convert_from_path
 from PIL import Image
 from PDFBuilder import PDFBuilder
+from llm_interface import LLMInterface
 
 class MedicalCodingAgent:
-    def __init__(self, icd10_data_path="ICD10.json", cpt4_data_path="CPT4.json", pdf_builder=None,
-                 tesseract_cmd=None, poppler_path=None, openai_api_key=None):
+    def __init__(self, llm: LLMInterface, icd10_data_path="ICD10.json", cpt4_data_path="CPT4.json", pdf_builder=None,
+                 tesseract_cmd=None, poppler_path=None):
+        self.llm = llm  # Use the LLM interface
+
         # Configure Tesseract OCR path
         if tesseract_cmd:
             pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
 
         # Configure Poppler path
         self.poppler_path = poppler_path
-
-        # Configure OpenAI API key
-        if openai_api_key:
-            openai.api_key = openai_api_key
 
         # Load ICD-10 and CPT-4 data
         self.icd10_data = self.load_icd10_data(icd10_data_path)
@@ -133,24 +131,13 @@ class MedicalCodingAgent:
         """Add a message to the conversation history"""
         self.conversation_history.append({"role": role, "content": content})
     
-    def generate_openai_response(self, specific_prompt=None):
-        """Generate a response using OpenAI API"""
-        messages = self.conversation_history.copy()
-        
-        if specific_prompt:
-            messages.append({"role": "system", "content": specific_prompt})
-        
+    def generate_llm_response(self, specific_prompt=None):
+        """Generate a response using the LLM interface."""
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4.1",
-                messages=messages,
-                max_tokens=1000,
-                temperature=0.7
-            )
-            assistant_response = response.choices[0].message.content.strip()
-            self.add_to_history("assistant", assistant_response)
-            print("Assistant:", assistant_response)
-            return assistant_response
+            response = self.llm.generate_response(self.conversation_history, specific_prompt)
+            self.add_to_history("assistant", response)
+            print("Assistant:", response)
+            return response
         except Exception as e:
             error_message = f"I apologize, but I encountered an error: {str(e)}. Please try again."
             self.add_to_history("assistant", error_message)
@@ -176,7 +163,7 @@ class MedicalCodingAgent:
         For any missing information, use null or empty string.
         """
         
-        response = self.generate_openai_response(system_prompt)
+        response = self.generate_llm_response(system_prompt)
         
         # Try to extract JSON from the response
         try:
@@ -228,7 +215,7 @@ class MedicalCodingAgent:
         """
         
         # Extract diagnoses
-        diagnoses_response = self.generate_openai_response(icd10_system_prompt)
+        diagnoses_response = self.generate_llm_response(icd10_system_prompt)
         
         # Try to parse diagnoses from the response
         extracted_diagnoses = []
@@ -261,7 +248,7 @@ class MedicalCodingAgent:
         """
         
         # Extract procedures
-        procedures_response = self.generate_openai_response(cpt4_system_prompt)
+        procedures_response = self.generate_llm_response(cpt4_system_prompt)
         
         # Try to parse procedures from the response
         extracted_procedures = []
@@ -488,7 +475,7 @@ class MedicalCodingAgent:
             Format your response as JSON with relevant keys and values.
             """
             
-            response = self.generate_openai_response(system_prompt)
+            response = self.generate_llm_response(system_prompt)
             
             # Try to extract JSON from the response
             try:
@@ -536,7 +523,7 @@ class MedicalCodingAgent:
         For any missing information, use null or empty string.
         """
         
-        patient_info_response = self.generate_openai_response(patient_info_prompt)
+        patient_info_response = self.generate_llm_response(patient_info_prompt)
         
         try:
             # Find JSON in the response
@@ -665,7 +652,7 @@ class MedicalCodingAgent:
             Respond appropriately and suggest the next best action.
             """
             
-            self.generate_openai_response(system_prompt)
+            self.generate_llm_response(system_prompt)
 
     def handle_post_claim_menu(self, user_input):
         """Handle the menu after claim finalization"""
@@ -788,7 +775,7 @@ class MedicalCodingAgent:
             self.add_to_history("system", f"Extracted text from document:\n{text}")
             
             # Get structured information using GPT
-            response = self.generate_openai_response(system_prompt)
+            response = self.generate_llm_response(system_prompt)
             
             try:
                 # Find JSON in the response
