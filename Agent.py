@@ -10,15 +10,14 @@ from pdf2image import convert_from_path
 from PIL import Image
 from PDFBuilder import PDFBuilder
 
-# Configure Tesseract OCR path for Windows
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# Configure Tesseract OCR path
+pytesseract.pytesseract.tesseract_cmd = os.getenv('TESSERACT_CMD', '/usr/bin/tesseract')  # Default for Linux
 
-# Configure Poppler path for Windows
-POPPLER_PATH = r'C:\Program Files\poppler-24.08.0\Library\bin'
+# Configure Poppler path
+POPPLER_PATH = os.getenv('POPPLER_PATH', '/usr/bin')  # Default for Linux
 
-# Initialize OpenAI API
-# Replace with your actual API key
-openai.api_key = "I'm a key :) "
+# Initialize OpenAI API using environment variable
+openai.api_key = os.getenv('OPENAI_API_KEY', 'your-default-api-key')
 
 class MedicalCodingAgent:
     def __init__(self, icd10_data_path="ICD10.json", cpt4_data_path="CPT4.json", pdf_builder=None):
