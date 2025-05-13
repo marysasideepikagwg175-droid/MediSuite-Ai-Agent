@@ -851,8 +851,3 @@ class MedicalCodingAgent:
         except Exception as e:
             print(f"Error processing document: {e}")
             return f"Error processing document: {str(e)}"
-
-# Example usage
-if __name__ == "__main__":
-    agent = MedicalCodingAgent()
-    agent.start_conversation()
