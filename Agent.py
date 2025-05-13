@@ -10,21 +10,25 @@ from pdf2image import convert_from_path
 from PIL import Image
 from PDFBuilder import PDFBuilder
 
-# Configure Tesseract OCR path
-pytesseract.pytesseract.tesseract_cmd = os.getenv('TESSERACT_CMD', '/usr/bin/tesseract')  # Default for Linux
-
-# Configure Poppler path
-POPPLER_PATH = os.getenv('POPPLER_PATH', '/usr/bin')  # Default for Linux
-
-# Initialize OpenAI API using environment variable
-openai.api_key = os.getenv('OPENAI_API_KEY', 'your-default-api-key')
-
 class MedicalCodingAgent:
-    def __init__(self, icd10_data_path="ICD10.json", cpt4_data_path="CPT4.json", pdf_builder=None):
-        # Load ICD-10 codes from data.json
+    def __init__(self, icd10_data_path="ICD10.json", cpt4_data_path="CPT4.json", pdf_builder=None,
+                 tesseract_cmd=None, poppler_path=None, openai_api_key=None):
+        # Configure Tesseract OCR path
+        if tesseract_cmd:
+            pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+
+        # Configure Poppler path
+        self.poppler_path = poppler_path
+
+        # Configure OpenAI API key
+        if openai_api_key:
+            openai.api_key = openai_api_key
+
+        # Load ICD-10 and CPT-4 data
         self.icd10_data = self.load_icd10_data(icd10_data_path)
-        # Load CPT-4 codes from cpt4.json
         self.cpt4_data = self.load_cpt4_data(cpt4_data_path)
+
+        # Initialize other attributes
         self.patient_info = {}
         self.diagnoses = []
         self.procedures = []
@@ -34,7 +38,7 @@ class MedicalCodingAgent:
         self.current_state = "greeting"
         self.summary_mode = False
         self.clinical_info = {}
-        
+
         # Define essential patient info fields
         self.essential_info_fields = {
             "name": "full name",
@@ -746,7 +750,7 @@ class MedicalCodingAgent:
             if ext == '.pdf':
                 try:
                     # Convert PDF to images with Poppler path
-                    images = convert_from_path(file_path, poppler_path=POPPLER_PATH)
+                    images = convert_from_path(file_path, poppler_path=self.poppler_path)
                     text = ""
                     for image in images:
                         # Extract text from each page
