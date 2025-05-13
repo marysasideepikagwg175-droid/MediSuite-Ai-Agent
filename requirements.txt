@@ -1,9 +1,10 @@
-openai>=1.0.0
-reportlab>=4.0.0
-fuzzywuzzy>=0.18.0
+openai
+reportlab
+fuzzywuzzy
+pytesseract
+pdf2image
+Pillow
+python-Levenshtein
 python-Levenshtein>=0.21.0
-pytesseract>=0.3.10
-pdf2image>=1.16.3
-Pillow>=10.0.0
 python-magic>=0.4.27
 tkinter>=0.1.0
