@@ -1,34 +1,32 @@
 import os
 import json
 import re
-from datetime import datetime
-import openai
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
 from reportlab.lib.units import inch
 from reportlab.lib import colors
-from reportlab.platypus import Table, TableStyle
 from fuzzywuzzy import fuzz, process
 import pytesseract
 from pdf2image import convert_from_path
 from PIL import Image
-
-# Configure Tesseract OCR path for Windows
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-
-# Configure Poppler path for Windows
-POPPLER_PATH = r'C:\Program Files\poppler-24.08.0\Library\bin'
-
-# Initialize OpenAI API
-# Replace with your actual API key
-openai.api_key = "I'm a key :) "
+from PDFBuilder import PDFBuilder
+from llm_interface import LLMInterface
 
 class MedicalCodingAgent:
-    def __init__(self, icd10_data_path="ICD10.json", cpt4_data_path="CPT4.json"):
-        # Load ICD-10 codes from data.json
+    def __init__(self, llm: LLMInterface, icd10_data_path="ICD10.json", cpt4_data_path="CPT4.json", pdf_builder=None,
+                 tesseract_cmd=None, poppler_path=None):
+        self.llm = llm  # Use the LLM interface
+
+        # Configure Tesseract OCR path
+        if tesseract_cmd:
+            pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+
+        # Configure Poppler path
+        self.poppler_path = poppler_path
+
+        # Load ICD-10 and CPT-4 data
         self.icd10_data = self.load_icd10_data(icd10_data_path)
-        # Load CPT-4 codes from cpt4.json
         self.cpt4_data = self.load_cpt4_data(cpt4_data_path)
+
+        # Initialize other attributes
         self.patient_info = {}
         self.diagnoses = []
         self.procedures = []
@@ -38,7 +36,7 @@ class MedicalCodingAgent:
         self.current_state = "greeting"
         self.summary_mode = False
         self.clinical_info = {}
-        
+
         # Define essential patient info fields
         self.essential_info_fields = {
             "name": "full name",
@@ -47,7 +45,10 @@ class MedicalCodingAgent:
             "insurance": "insurance provider",
             "policy": "insurance ID"
         }
-        
+
+        # Inject PDFBuilder instance
+        self.pdf_builder = pdf_builder or PDFBuilder("default_claim.pdf")
+
     def load_icd10_data(self, data_path):
         """Load ICD-10 codes from json file"""
         try:
@@ -130,24 +131,13 @@ class MedicalCodingAgent:
         """Add a message to the conversation history"""
         self.conversation_history.append({"role": role, "content": content})
     
-    def generate_openai_response(self, specific_prompt=None):
-        """Generate a response using OpenAI API"""
-        messages = self.conversation_history.copy()
-        
-        if specific_prompt:
-            messages.append({"role": "system", "content": specific_prompt})
-        
+    def generate_llm_response(self, specific_prompt=None):
+        """Generate a response using the LLM interface."""
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4.1",
-                messages=messages,
-                max_tokens=1000,
-                temperature=0.7
-            )
-            assistant_response = response.choices[0].message.content.strip()
-            self.add_to_history("assistant", assistant_response)
-            print("Assistant:", assistant_response)
-            return assistant_response
+            response = self.llm.generate_response(self.conversation_history, specific_prompt)
+            self.add_to_history("assistant", response)
+            print("Assistant:", response)
+            return response
         except Exception as e:
             error_message = f"I apologize, but I encountered an error: {str(e)}. Please try again."
             self.add_to_history("assistant", error_message)
@@ -173,7 +163,7 @@ class MedicalCodingAgent:
         For any missing information, use null or empty string.
         """
         
-        response = self.generate_openai_response(system_prompt)
+        response = self.generate_llm_response(system_prompt)
         
         # Try to extract JSON from the response
         try:
@@ -225,7 +215,7 @@ class MedicalCodingAgent:
         """
         
         # Extract diagnoses
-        diagnoses_response = self.generate_openai_response(icd10_system_prompt)
+        diagnoses_response = self.generate_llm_response(icd10_system_prompt)
         
         # Try to parse diagnoses from the response
         extracted_diagnoses = []
@@ -258,7 +248,7 @@ class MedicalCodingAgent:
         """
         
         # Extract procedures
-        procedures_response = self.generate_openai_response(cpt4_system_prompt)
+        procedures_response = self.generate_llm_response(cpt4_system_prompt)
         
         # Try to parse procedures from the response
         extracted_procedures = []
@@ -485,7 +475,7 @@ class MedicalCodingAgent:
             Format your response as JSON with relevant keys and values.
             """
             
-            response = self.generate_openai_response(system_prompt)
+            response = self.generate_llm_response(system_prompt)
             
             # Try to extract JSON from the response
             try:
@@ -533,7 +523,7 @@ class MedicalCodingAgent:
         For any missing information, use null or empty string.
         """
         
-        patient_info_response = self.generate_openai_response(patient_info_prompt)
+        patient_info_response = self.generate_llm_response(patient_info_prompt)
         
         try:
             # Find JSON in the response
@@ -564,44 +554,23 @@ class MedicalCodingAgent:
         self.current_state = "reviewing_claim"
 
     def generate_cms1500_pdf(self):
-        """Generate a CMS-1500 claim form as PDF with dynamic layout"""
+        """Generate a CMS-1500 claim form as PDF with dynamic layout."""
         patient_name = self.patient_info.get('name', 'Unknown').replace(' ', '_')
         filename = f"claim_{patient_name}.pdf"
 
-        c = canvas.Canvas(filename, pagesize=letter)
-        width, height = letter
-        margin = inch
-        y_position = height - margin
-        min_y = margin
-        section_gap = 0.25 * inch
-        table_gap = 0.15 * inch
-
-        def check_page_space(c, y, needed_height):
-            if y - needed_height < min_y:
-                c.showPage()
-                return height - margin
-            return y
+        # Update the filename in the PDFBuilder instance
+        self.pdf_builder.filename = filename
 
         # Title
-        c.setFont("Helvetica-Bold", 16)
-        c.setFillColor(colors.black)
+        self.pdf_builder.canvas.setFont("Helvetica-Bold", 16)
+        self.pdf_builder.canvas.setFillColor(colors.black)
         title = "CMS-1500 HEALTH INSURANCE CLAIM FORM EXAMPLE"
-        title_width = c.stringWidth(title, "Helvetica-Bold", 16)
-        c.drawString((width - title_width) / 2, y_position, title)
-        y_position -= 0.5 * inch
-
-        # Section helper
-        def draw_section_header(label, y):
-            c.setFillColor(colors.lightgrey)
-            c.rect(margin, y - 0.3*inch, width - 2*margin, 0.3*inch, fill=1)
-            c.setFillColor(colors.black)
-            c.setFont("Helvetica-Bold", 12)
-            c.drawString(margin + 0.1*inch, y - 0.2*inch, label)
-            return y - 0.4*inch
+        title_width = self.pdf_builder.canvas.stringWidth(title, "Helvetica-Bold", 16)
+        self.pdf_builder.canvas.drawString((self.pdf_builder.width - title_width) / 2, self.pdf_builder.y_position, title)
+        self.pdf_builder.y_position -= 0.5 * inch
 
         # Patient Info
-        y_position = draw_section_header("PATIENT INFORMATION", y_position)
-        c.setFont("Helvetica", 10)
+        self.pdf_builder.draw_section_header("PATIENT INFORMATION")
         patient_data = [
             ["Name:", self.patient_info.get('name', 'N/A')],
             ["DOB:", self.patient_info.get('dob', 'N/A')],
@@ -609,142 +578,40 @@ class MedicalCodingAgent:
             ["Address:", self.patient_info.get('address', 'N/A')],
             ["Phone:", self.patient_info.get('phone', 'N/A')]
         ]
-        additional_fields = [k for k in self.patient_info.keys() if k not in ['name', 'dob', 'gender', 'address', 'phone', 'insurance', 'policy', 'group']]
-        for field in additional_fields:
-            value = str(self.patient_info.get(field, 'N/A'))
-            if value.startswith("{") and value.endswith("}"):
-                value = value.replace("{", "").replace("}", "").replace("'", "")
-            patient_data.append([f"{field.replace('_', ' ').capitalize()}:", value])
-        table = Table(patient_data, colWidths=[1.5*inch, 4.5*inch])
-        table.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
-            ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
-            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-            ('PADDING', (0, 0), (-1, -1), 6),
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('WORDWRAP', (1, 0), (1, -1), 'CJK'),
-        ]))
-        w, h = table.wrap(width - 2*margin, y_position)
-        y_position = check_page_space(c, y_position, h)
-        table.drawOn(c, margin, y_position - h)
-        y_position -= h + section_gap
+        self.pdf_builder.draw_table(patient_data, col_widths=[1.5 * inch, 4.5 * inch])
 
         # Insurance Info
-        y_position = draw_section_header("INSURANCE INFORMATION", y_position)
+        self.pdf_builder.draw_section_header("INSURANCE INFORMATION")
         insurance_data = [
             ["Provider:", self.patient_info.get('insurance', 'N/A')],
             ["Policy #:", self.patient_info.get('policy', 'N/A')],
             ["Group #:", self.patient_info.get('group', 'N/A')]
         ]
-        table = Table(insurance_data, colWidths=[1.5*inch, 4.5*inch])
-        table.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
-            ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
-            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-            ('PADDING', (0, 0), (-1, -1), 6),
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('WORDWRAP', (1, 0), (1, -1), 'CJK'),
-        ]))
-        w, h = table.wrap(width - 2*margin, y_position)
-        y_position = check_page_space(c, y_position, h)
-        table.drawOn(c, margin, y_position - h)
-        y_position -= h + section_gap
+        self.pdf_builder.draw_table(insurance_data, col_widths=[1.5 * inch, 4.5 * inch])
 
-        # Clinical Info (if available)
+        # Clinical Info
         if hasattr(self, 'clinical_info') and self.clinical_info:
-            y_position = draw_section_header("CLINICAL INFORMATION", y_position)
-            clinical_data = []
-            for key, value in self.clinical_info.items():
-                clinical_data.append([f"{key.replace('_', ' ').capitalize()}:", str(value)])
-            table = Table(clinical_data, colWidths=[1.5*inch, 4.5*inch])
-            table.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
-                ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-                ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
-                ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-                ('PADDING', (0, 0), (-1, -1), 6),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('WORDWRAP', (1, 0), (1, -1), 'CJK'),
-            ]))
-            w, h = table.wrap(width - 2*margin, y_position)
-            y_position = check_page_space(c, y_position, h)
-            table.drawOn(c, margin, y_position - h)
-            y_position -= h + section_gap
+            self.pdf_builder.draw_section_header("CLINICAL INFORMATION")
+            clinical_data = [[f"{key.replace('_', ' ').capitalize()}:", str(value)] for key, value in self.clinical_info.items()]
+            self.pdf_builder.draw_table(clinical_data, col_widths=[1.5 * inch, 4.5 * inch])
 
         # Diagnoses
         if self.matched_icd10_codes:
-            y_position = draw_section_header("DIAGNOSIS CODES (ICD-10)", y_position)
-            diagnosis_data = [["Code", "Description"]]
-            for code in self.matched_icd10_codes:
-                desc = str(code['disease'])
-                if desc.startswith("{") and desc.endswith("}"):
-                    desc = desc.replace("{", "").replace("}", "").replace("'", "")
-                diagnosis_data.append([code['code'], desc])
-            table = Table(diagnosis_data, colWidths=[1.5*inch, 4.5*inch])
-            table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('PADDING', (0, 0), (-1, -1), 6),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('WORDWRAP', (1, 0), (1, -1), 'CJK'),
-            ]))
-            w, h = table.wrap(width - 2*margin, y_position)
-            y_position = check_page_space(c, y_position, h)
-            table.drawOn(c, margin, y_position - h)
-            y_position -= h + section_gap
+            self.pdf_builder.draw_section_header("DIAGNOSIS CODES (ICD-10)")
+            diagnosis_data = [["Code", "Description"]] + [[code['code'], code['disease']] for code in self.matched_icd10_codes]
+            self.pdf_builder.draw_table(diagnosis_data, col_widths=[1.5 * inch, 4.5 * inch])
 
         # Procedures
         if self.matched_cpt4_codes:
-            y_position = draw_section_header("PROCEDURE CODES (CPT-4)", y_position)
-            procedure_data = [["Code", "Description"]]
-            for code in self.matched_cpt4_codes:
-                desc = str(code['procedure'])
-                if desc.startswith("{") and desc.endswith("}"):
-                    desc = desc.replace("{", "").replace("}", "").replace("'", "")
-                procedure_data.append([code['code'], desc])
-            table = Table(procedure_data, colWidths=[1.5*inch, 4.5*inch])
-            table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('PADDING', (0, 0), (-1, -1), 6),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('WORDWRAP', (1, 0), (1, -1), 'CJK'),
-            ]))
-            w, h = table.wrap(width - 2*margin, y_position)
-            y_position = check_page_space(c, y_position, h)
-            table.drawOn(c, margin, y_position - h)
-            y_position -= h + section_gap
+            self.pdf_builder.draw_section_header("PROCEDURE CODES (CPT-4)")
+            procedure_data = [["Code", "Description"]] + [[code['code'], code['procedure']] for code in self.matched_cpt4_codes]
+            self.pdf_builder.draw_table(procedure_data, col_widths=[1.5 * inch, 4.5 * inch])
 
         # Footer
-        y_position = max(y_position, min_y + 0.5*inch)
-        c.setFont("Helvetica", 8)
-        c.setFillColor(colors.grey)
-        c.drawString(margin, y_position, "This is a computer-generated form created by AI Medical Coding Assistant.")
-        y_position -= 0.2*inch
-        c.drawString(margin, y_position, f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self.pdf_builder.add_footer()
 
-        c.save()
+        # Save the PDF
+        self.pdf_builder.save()
         return filename
     
     def handle_default_conversation(self, user_input):
@@ -785,7 +652,7 @@ class MedicalCodingAgent:
             Respond appropriately and suggest the next best action.
             """
             
-            self.generate_openai_response(system_prompt)
+            self.generate_llm_response(system_prompt)
 
     def handle_post_claim_menu(self, user_input):
         """Handle the menu after claim finalization"""
@@ -870,7 +737,7 @@ class MedicalCodingAgent:
             if ext == '.pdf':
                 try:
                     # Convert PDF to images with Poppler path
-                    images = convert_from_path(file_path, poppler_path=POPPLER_PATH)
+                    images = convert_from_path(file_path, poppler_path=self.poppler_path)
                     text = ""
                     for image in images:
                         # Extract text from each page
@@ -908,7 +775,7 @@ class MedicalCodingAgent:
             self.add_to_history("system", f"Extracted text from document:\n{text}")
             
             # Get structured information using GPT
-            response = self.generate_openai_response(system_prompt)
+            response = self.generate_llm_response(system_prompt)
             
             try:
                 # Find JSON in the response
@@ -975,8 +842,3 @@ class MedicalCodingAgent:
         except Exception as e:
             print(f"Error processing document: {e}")
             return f"Error processing document: {str(e)}"
-
-# Example usage
-if __name__ == "__main__":
-    agent = MedicalCodingAgent()
-    agent.start_conversation()
